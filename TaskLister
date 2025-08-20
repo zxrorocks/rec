@@ -1,0 +1,58 @@
+$IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $IsAdmin) {
+    Write-Host "`n[WARNING] This script is NOT running with Administrator privileges." -ForegroundColor Red
+    Write-Host "[ACTION] Please right-click PowerShell and then select 'Run as Administrator.'" -ForegroundColor Yellow
+    Write-Host ""
+    Pause
+    exit 1
+}
+
+$currentUser = $env:USERNAME
+
+Write-Host "`nChecking for scheduled tasks created by: ${currentUser}`n"
+
+$tasks = Get-ScheduledTask
+
+$myTasks = @()
+foreach ($task in $tasks) {
+    try {
+        # Export as XML to read Author and Actions fields
+        $xml = [xml](Export-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath)
+        $author = $xml.Task.RegistrationInfo.Author
+
+        if ($author -match "$currentUser") {
+            # Extract the Actions node(s)
+            $actions = $xml.Task.Actions.Exec | ForEach-Object {
+                # Usually there is Command and optional Arguments
+                $cmd = $_.Command
+                $args = $_.Arguments
+                if ([string]::IsNullOrEmpty($args)) {
+                    $cmd
+                } else {
+                    "$cmd $args"
+                }
+            }
+
+            $actionText = if ($actions) { $actions -join "; " } else { "No executable action found" }
+
+            $myTasks += [PSCustomObject]@{
+                TaskName = $task.TaskName
+                Path     = $task.TaskPath
+                Author   = $author
+                Actions  = $actionText
+            }
+        }
+    } catch {
+        # Some system tasks can't be accessed
+        continue
+    }
+}
+
+if ($myTasks.Count -eq 0) {
+    Write-Host "No scheduled tasks found created by: ${currentUser}"
+} else {
+    Write-Host "Scheduled tasks created by ${currentUser}:`n"
+    $myTasks | Format-Table -AutoSize
+}
